@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terrain Data Downloader</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 20px;
+            height: 70vh;
+        }
+
+        .map-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow: hidden;
+            position: relative;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        .controls-panel {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            padding: 25px;
+            overflow-y: auto;
+        }
+
+        .control-section {
+            margin-bottom: 25px;
+        }
+
+        .control-section h3 {
+            color: #4a5568;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 5px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .checkbox-item:hover {
+            border-color: #667eea;
+            background-color: #f7fafc;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #667eea;
+        }
+
+        .checkbox-item label {
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .coordinates-display {
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .coord-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-family: 'Courier New', monospace;
+        }
+
+        .coord-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .coord-label {
+            font-weight: bold;
+            color: #4a5568;
+        }
+
+        .coord-value {
+            color: #2d3748;
+        }
+
+        .download-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+
+        .download-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .download-btn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background-color: #e2e8f0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            text-align: center;
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .status-message {
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 15px;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .status-success {
+            background-color: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+
+        .status-error {
+            background-color: #fed7d7;
+            color: #822727;
+            border: 1px solid #feb2b2;
+        }
+
+        .status-info {
+            background-color: #bee3f8;
+            color: #2a4365;
+            border: 1px solid #90cdf4;
+        }
+
+        .download-link {
+            display: inline-block;
+            background: #48bb78;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            margin-top: 10px;
+            transition: background 0.3s ease;
+        }
+
+        .download-link:hover {
+            background: #38a169;
+        }
+
+        .selection-info {
+            background: #e6fffa;
+            border: 1px solid #81e6d9;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+            color: #234e52;
+        }
+
+        .data-info {
+            background: #e6fffa;
+            border: 1px solid #81e6d9;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+            color: #234e52;
+            font-weight: 500;
+        }
+
+        .data-info i {
+            margin-right: 8px;
+            color: #319795;
+        }
+
+        .leaflet-draw-toolbar {
+            background: white !important;
+            border-radius: 8px !important;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1) !important;
+        }
+
+        @media (max-width: 1200px) {
+            .main-content {
+                grid-template-columns: 1fr;
+                grid-template-rows: 60vh auto;
+            }
+            
+            .controls-panel {
+                max-height: none;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .main-content {
+                height: auto;
+                grid-template-rows: 50vh auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-mountain"></i> Terrain Data Downloader</h1>
+            <p>Download elevation and orthoimagery data in UTM projection</p>
+        </div>
+
+        <div class="main-content">
+            <div class="map-container">
+                <div id="map"></div>
+            </div>
+
+            <div class="controls-panel">
+                <div class="selection-info">
+                    <i class="fas fa-info-circle"></i>
+                    Use the rectangle tool on the map to select the area for data download.
+                </div>
+
+                <div id="dataInfo" class="data-info">
+                    <i class="fas fa-database"></i>
+                    <span>Downloads real USGS elevation and imagery data with perfect alignment</span>
+                </div>
+
+                <div class="control-section">
+                    <h3><i class="fas fa-map-marked-alt"></i> Selected Area</h3>
+                    <div class="coordinates-display" id="coordinates">
+                        <div class="coord-row">
+                            <span class="coord-label">North:</span>
+                            <span class="coord-value" id="north">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">South:</span>
+                            <span class="coord-value" id="south">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">East:</span>
+                            <span class="coord-value" id="east">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">West:</span>
+                            <span class="coord-value" id="west">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-section">
+                    <h3><i class="fas fa-download"></i> Data Types</h3>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="elevation" checked>
+                            <label for="elevation">
+                                <i class="fas fa-mountain"></i> Elevation Data (DEM)
+                            </label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="imagery" checked>
+                            <label for="imagery">
+                                <i class="fas fa-satellite"></i> Orthoimagery (Aerial Photos)
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="download-btn" id="downloadBtn" disabled>
+                    <i class="fas fa-download"></i> Download Terrain Data
+                </button>
+
+                <div class="progress-container" id="progressContainer">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">Preparing download...</div>
+                </div>
+
+                <div id="statusMessage"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <script>
+        let map;
+        let drawnItems;
+        let selectedBounds = null;
+        let currentJobId = null;
+        let statusCheckInterval = null;
+
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([39.8283, -98.5795], 4); // Center of USA
+
+            // Add tile layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            // Initialize draw controls
+            drawnItems = new L.FeatureGroup();
+            map.addLayer(drawnItems);
+
+            const drawControl = new L.Control.Draw({
+                position: 'topright',
+                draw: {
+                    polygon: false,
+                    circle: false,
+                    circlemarker: false,
+                    marker: false,
+                    polyline: false,
+                    rectangle: {
+                        shapeOptions: {
+                            color: '#667eea',
+                            weight: 3,
+                            fillOpacity: 0.2
+                        }
+                    }
+                },
+                edit: {
+                    featureGroup: drawnItems,
+                    remove: true
+                }
+            });
+            map.addControl(drawControl);
+
+            // Handle draw events
+            map.on(L.Draw.Event.CREATED, function(e) {
+                drawnItems.clearLayers();
+                drawnItems.addLayer(e.layer);
+                updateBounds(e.layer.getBounds());
+            });
+
+            map.on(L.Draw.Event.EDITED, function(e) {
+                e.layers.eachLayer(function(layer) {
+                    updateBounds(layer.getBounds());
+                });
+            });
+
+            map.on(L.Draw.Event.DELETED, function(e) {
+                selectedBounds = null;
+                updateCoordinatesDisplay();
+                document.getElementById('downloadBtn').disabled = true;
+            });
+        }
+
+        function updateBounds(bounds) {
+            selectedBounds = {
+                north: bounds.getNorth(),
+                south: bounds.getSouth(),
+                east: bounds.getEast(),
+                west: bounds.getWest()
+            };
+            updateCoordinatesDisplay();
+            document.getElementById('downloadBtn').disabled = false;
+        }
+
+        function updateCoordinatesDisplay() {
+            const coords = ['north', 'south', 'east', 'west'];
+            coords.forEach(coord => {
+                const element = document.getElementById(coord);
+                if (selectedBounds) {
+                    element.textContent = selectedBounds[coord].toFixed(6) + '°';
+                } else {
+                    element.textContent = '-';
+                }
+            });
+        }
+
+        function startDownload() {
+            if (!selectedBounds) {
+                showStatus('Please select an area on the map first.', 'error');
+                return;
+            }
+
+            const includeElevation = document.getElementById('elevation').checked;
+            const includeImagery = document.getElementById('imagery').checked;
+
+            if (!includeElevation && !includeImagery) {
+                showStatus('Please select at least one data type.', 'error');
+                return;
+            }
+
+            const downloadBtn = document.getElementById('downloadBtn');
+            downloadBtn.disabled = true;
+            downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting Download...';
+
+            document.getElementById('progressContainer').style.display = 'block';
+            document.getElementById('statusMessage').innerHTML = '';
+
+            const requestData = {
+                ...selectedBounds,
+                include_elevation: includeElevation,
+                include_imagery: includeImagery
+            };
+
+            fetch('/api/download', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                currentJobId = data.job_id;
+                startStatusCheck();
+            })
+            .catch(error => {
+                showStatus(`Error starting download: ${error.message}`, 'error');
+                resetDownloadButton();
+            });
+        }
+
+        function startStatusCheck() {
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+            }
+
+            statusCheckInterval = setInterval(checkStatus, 2000);
+            checkStatus(); // Check immediately
+        }
+
+        function checkStatus() {
+            if (!currentJobId) return;
+
+            fetch(`/api/status/${currentJobId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                updateProgress(data.progress || 0, data.status);
+
+                // Show warnings if any
+                if (data.warnings && data.warnings.length > 0) {
+                    const warningHtml = data.warnings.map(warning => 
+                        `<div class="status-info"><i class="fas fa-info-circle"></i> ${warning}</div>`
+                    ).join('');
+                    document.getElementById('statusMessage').innerHTML = warningHtml;
+                }
+
+                if (data.status === 'completed') {
+                    clearInterval(statusCheckInterval);
+                    showDownloadComplete(currentJobId);
+                } else if (data.status === 'failed') {
+                    clearInterval(statusCheckInterval);
+                    showStatus(`Download failed: ${data.error || 'Unknown error'}`, 'error');
+                    resetDownloadButton();
+                }
+            })
+            .catch(error => {
+                console.error('Status check error:', error);
+                clearInterval(statusCheckInterval);
+                showStatus(`Status check failed: ${error.message}`, 'error');
+                resetDownloadButton();
+            });
+        }
+
+
+
+        function updateProgress(progress, status) {
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+
+            progressFill.style.width = progress + '%';
+
+            const statusMessages = {
+                'starting': 'Initializing download...',
+                'creating_reference_grid': 'Creating perfect alignment grid...',
+                'downloading_elevation': 'Downloading real USGS elevation data...',
+                'downloading_imagery': 'Downloading real USGS imagery data...',
+                'verifying_alignment': 'Verifying perfect alignment...',
+                'creating_package': 'Creating download package...',
+                'completed': 'Real data with perfect alignment ready!'
+            };
+
+            progressText.textContent = statusMessages[status] || `Progress: ${progress}%`;
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            
+            document.getElementById('downloadBtn').addEventListener('click', startDownload);
+        });
+    </script>
+</body>
+</html>
