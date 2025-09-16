@@ -147,7 +147,10 @@ The application ensures that elevation and imagery data have identical spatial p
 ### **Automatic Alignment Process**
 1. **Download**: Elevation and imagery data are downloaded at high resolution (2048x2048 pixels)
 2. **Reprojection**: Both datasets are reprojected to the appropriate UTM coordinate system
-3. **Alignment**: Datasets are resampled to have identical:
+3. **Gap Detection**: System automatically detects regions with missing or no-data values
+4. **Multi-tile Download**: Additional tiles are downloaded to fill missing regions
+5. **Tile Merging**: All tiles are merged into a single, complete dataset
+6. **Alignment**: Final datasets are resampled to have identical:
    - Pixel dimensions (width × height)
    - Pixel resolution (10-meter ground sample distance)
    - Spatial bounds (exact coordinate coverage)
@@ -155,9 +158,39 @@ The application ensures that elevation and imagery data have identical spatial p
 
 ### **Benefits**
 - **Perfect Overlay**: Elevation and imagery align pixel-for-pixel
+- **Complete Coverage**: Automatic multi-tile downloading ensures no missing data regions
 - **Consistent Analysis**: Same resolution enables direct comparison
 - **GIS Ready**: Files can be used together in any GIS software
 - **Optimal Quality**: 10-meter resolution balances detail with file size
+
+## Complete Data Coverage
+
+The terrain loader now automatically ensures complete data coverage by:
+
+### **Enhanced Gap Detection**
+- Comprehensive detection of all no-data value types (-9999, -32768, 0, etc.)
+- Identifies unrealistic elevation values (< -500m or > 9000m)
+- Detects suspicious flat regions that may be placeholder values
+- Uses robust statistical analysis to find outliers
+- Analyzes imagery for zero-value or transparent regions
+
+### **Multi-tile Strategy**
+- Downloads up to 10 additional elevation tiles (5 for imagery) to ensure coverage
+- Grid-based tiling approach for areas with >5% missing data
+- Expanded USGS service URLs for better data availability
+- Prioritizes largest missing regions first for maximum coverage
+
+### **Intelligent Merging**
+- Seamlessly merges multiple tiles into a single complete dataset
+- Preserves data quality through proper reprojection and resampling
+- Maintains perfect pixel alignment across all merged tiles
+- Improves existing data by replacing low-quality values with better tile data
+
+### **Final Validation**
+- Comprehensive validation of merged elevation data
+- Conservative interpolation for small remaining gaps (< 2% of data)
+- Detailed logging of gap statistics and filling progress
+- Warnings for areas that may require manual review
 
 ## Troubleshooting
 
