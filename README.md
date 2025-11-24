@@ -47,7 +47,7 @@ pip install -r requirements.txt
 ### Starting the Server
 
 ```bash
-python app.py
+python3 app.py
 ```
 
 The application will start on `http://localhost:5000`
