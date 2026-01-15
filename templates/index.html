@@ -284,6 +284,56 @@
             line-height: 1.4;
         }
 
+        .size-estimator {
+            margin-top: 12px;
+            padding: 12px;
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border-radius: 8px;
+            border: 1px solid #cbd5e0;
+        }
+
+        .size-display {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .size-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+        }
+
+        .size-label {
+            color: #4a5568;
+            font-weight: 500;
+        }
+
+        .size-label i {
+            width: 16px;
+            margin-right: 6px;
+            color: #667eea;
+        }
+
+        .size-value {
+            color: #2d3748;
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        .size-value.large {
+            color: #e53e3e;
+        }
+
+        .size-value.medium {
+            color: #d69e2e;
+        }
+
+        .size-value.small {
+            color: #38a169;
+        }
+
         .data-info {
             background: #e6fffa;
             border: 1px solid #81e6d9;
@@ -408,6 +458,22 @@
                         <div class="resolution-info">
                             <small><i class="fas fa-info-circle"></i> Higher resolutions provide more detail but larger file sizes. 1m may not be available in all areas.</small>
                         </div>
+                        <div class="size-estimator" id="sizeEstimator">
+                            <div class="size-display">
+                                <div class="size-row">
+                                    <span class="size-label"><i class="fas fa-expand-arrows-alt"></i> Extent:</span>
+                                    <span class="size-value" id="areaSize">Select area on map</span>
+                                </div>
+                                <div class="size-row">
+                                    <span class="size-label"><i class="fas fa-th"></i> Dimensions:</span>
+                                    <span class="size-value" id="pixelCount">-</span>
+                                </div>
+                                <div class="size-row">
+                                    <span class="size-label"><i class="fas fa-file-archive"></i> Est. Size:</span>
+                                    <span class="size-value" id="fileSize">-</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -488,6 +554,7 @@
             map.on(L.Draw.Event.DELETED, function(e) {
                 selectedBounds = null;
                 updateCoordinatesDisplay();
+                updateSizeEstimate();
                 document.getElementById('downloadBtn').disabled = true;
             });
         }
@@ -500,7 +567,118 @@
                 west: bounds.getWest()
             };
             updateCoordinatesDisplay();
+            updateSizeEstimate();
             document.getElementById('downloadBtn').disabled = false;
+        }
+
+        function calculateAreaAndSize() {
+            if (!selectedBounds) {
+                return {
+                    areaKm2: 0,
+                    widthKm: 0,
+                    heightKm: 0,
+                    areaDisplay: 'Select area on map',
+                    pixelsWidth: 0,
+                    pixelsHeight: 0,
+                    totalPixels: 0,
+                    fileSizeMB: 0,
+                    fileSizeDisplay: '-'
+                };
+            }
+
+            // Calculate area in degrees
+            const widthDeg = selectedBounds.east - selectedBounds.west;
+            const heightDeg = selectedBounds.north - selectedBounds.south;
+            
+            // Convert to approximate kilometers (rough calculation)
+            const centerLat = (selectedBounds.north + selectedBounds.south) / 2;
+            const latFactor = Math.cos(centerLat * Math.PI / 180);
+            const widthKm = widthDeg * 111.32 * latFactor; // 1 degree longitude ≈ 111.32km * cos(lat)
+            const heightKm = heightDeg * 111.32; // 1 degree latitude ≈ 111.32km
+            const areaKm2 = widthKm * heightKm;
+
+            // Get selected resolution
+            const resolution = parseInt(document.getElementById('demResolution').value);
+            
+            // Convert area to meters
+            const widthM = widthKm * 1000;
+            const heightM = heightKm * 1000;
+            
+            // Calculate pixels
+            const pixelsWidth = Math.ceil(widthM / resolution);
+            const pixelsHeight = Math.ceil(heightM / resolution);
+            const totalPixels = pixelsWidth * pixelsHeight;
+            
+            // Estimate file size (4 bytes per pixel for F32, plus overhead)
+            // Add compression factor (TIFF with LZW compression typically 30-50% of raw size)
+            const rawSizeBytes = totalPixels * 4; // 4 bytes per F32 pixel
+            const compressedSizeBytes = rawSizeBytes * 0.4; // Assume 40% compression ratio
+            const fileSizeMB = compressedSizeBytes / (1024 * 1024);
+            
+            // Format extent display (width × height)
+            let areaDisplay;
+            if (widthKm < 1 && heightKm < 1) {
+                // Show in meters for small areas
+                areaDisplay = `${(widthKm * 1000).toFixed(0)}m × ${(heightKm * 1000).toFixed(0)}m`;
+            } else if (widthKm < 10 && heightKm < 10) {
+                // Show in kilometers with 1 decimal for medium areas
+                areaDisplay = `${widthKm.toFixed(1)}km × ${heightKm.toFixed(1)}km`;
+            } else {
+                // Show in kilometers with no decimals for large areas
+                areaDisplay = `${widthKm.toFixed(0)}km × ${heightKm.toFixed(0)}km`;
+            }
+            
+            let fileSizeDisplay;
+            if (fileSizeMB < 1) {
+                fileSizeDisplay = `${(fileSizeMB * 1024).toFixed(0)} KB`;
+            } else if (fileSizeMB < 1024) {
+                fileSizeDisplay = `${fileSizeMB.toFixed(1)} MB`;
+            } else {
+                fileSizeDisplay = `${(fileSizeMB / 1024).toFixed(2)} GB`;
+            }
+            
+            return {
+                areaKm2,
+                widthKm,
+                heightKm,
+                areaDisplay,
+                pixelsWidth,
+                pixelsHeight,
+                totalPixels,
+                fileSizeMB,
+                fileSizeDisplay
+            };
+        }
+
+        function updateSizeEstimate() {
+            const sizeInfo = calculateAreaAndSize();
+            
+            // Update area display
+            document.getElementById('areaSize').textContent = sizeInfo.areaDisplay;
+            
+            // Update pixel dimensions
+            if (sizeInfo.totalPixels > 0) {
+                const dimensionDisplay = `${sizeInfo.pixelsWidth.toLocaleString()} × ${sizeInfo.pixelsHeight.toLocaleString()}`;
+                document.getElementById('pixelCount').textContent = dimensionDisplay;
+            } else {
+                document.getElementById('pixelCount').textContent = '-';
+            }
+            
+            // Update file size with color coding
+            const fileSizeElement = document.getElementById('fileSize');
+            fileSizeElement.textContent = sizeInfo.fileSizeDisplay;
+            
+            // Remove existing size classes
+            fileSizeElement.classList.remove('small', 'medium', 'large');
+            
+            // Add appropriate size class for color coding
+            if (sizeInfo.fileSizeMB > 100) {
+                fileSizeElement.classList.add('large'); // Red for >100MB
+            } else if (sizeInfo.fileSizeMB > 10) {
+                fileSizeElement.classList.add('medium'); // Yellow for 10-100MB
+            } else if (sizeInfo.fileSizeMB > 0) {
+                fileSizeElement.classList.add('small'); // Green for <10MB
+            }
         }
 
         function updateCoordinatesDisplay() {
@@ -698,6 +876,9 @@
             const elevationChecked = document.getElementById('elevation').checked;
             const resolutionSection = document.getElementById('resolutionSection');
             resolutionSection.style.display = elevationChecked ? 'block' : 'none';
+            
+            // Update size estimate when toggling elevation
+            updateSizeEstimate();
         }
 
         document.addEventListener('DOMContentLoaded', function() {
@@ -708,8 +889,12 @@
             // Add event listener for elevation checkbox
             document.getElementById('elevation').addEventListener('change', toggleResolutionSection);
             
+            // Add event listener for resolution changes
+            document.getElementById('demResolution').addEventListener('change', updateSizeEstimate);
+            
             // Initial state
             toggleResolutionSection();
+            updateSizeEstimate();
         });
     </script>
 </body>
