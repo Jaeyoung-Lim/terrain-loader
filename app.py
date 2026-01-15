@@ -31,7 +31,24 @@ class TerrainDownloader:
     def __init__(self):
         self.base_dir = os.path.join(os.getcwd(), 'downloads')
         os.makedirs(self.base_dir, exist_ok=True)
-        self.pixel_size = 10.0  # Fixed 10-meter resolution for perfect alignment
+        self.pixel_size = 10.0  # Default 10-meter resolution, can be overridden
+        
+        # Available DEM resolutions (in meters)
+        self.available_resolutions = {
+            1: "1m - Highest detail (urban areas, large file sizes)",
+            3: "3m - High detail (good coverage, moderate file sizes)", 
+            10: "10m - Standard detail (nationwide coverage, small files)",
+            30: "30m - Lower detail (nationwide coverage, very small files)"
+        }
+    
+    def set_resolution(self, resolution_meters):
+        """Set the DEM resolution for processing"""
+        if resolution_meters in self.available_resolutions:
+            self.pixel_size = float(resolution_meters)
+            logger.info(f"DEM resolution set to {resolution_meters}m")
+        else:
+            logger.warning(f"Resolution {resolution_meters}m not supported, using default 10m")
+            self.pixel_size = 10.0
     
     
     def get_utm_zone(self, lon, lat):
@@ -1165,11 +1182,31 @@ class TerrainDownloader:
     
     def _try_single_elevation_download(self, bounds, job_id, service_urls):
         """Try downloading elevation as a single tile"""
+        # Calculate appropriate image size based on resolution and area
+        area_width_deg = bounds['east'] - bounds['west']
+        area_height_deg = bounds['north'] - bounds['south']
+        
+        # Rough conversion: 1 degree ≈ 111km at equator, adjust for latitude
+        center_lat = (bounds['north'] + bounds['south']) / 2
+        lat_factor = abs(center_lat / 90) if center_lat != 0 else 1
+        area_width_m = area_width_deg * 111000 * lat_factor
+        area_height_m = area_height_deg * 111000
+        
+        # Calculate pixels needed for desired resolution
+        pixels_width = int(area_width_m / self.pixel_size)
+        pixels_height = int(area_height_m / self.pixel_size)
+        
+        # Limit to reasonable bounds (avoid huge downloads)
+        pixels_width = min(8192, max(64, pixels_width))
+        pixels_height = min(8192, max(64, pixels_height))
+        
+        logger.info(f"Requesting {pixels_width}x{pixels_height} pixels for {self.pixel_size}m resolution")
+        
         # Use WGS84 coordinates directly for exact bounding box match
         params = {
             'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
             'bboxSR': '4326',  # WGS84 for exact coordinate match
-            'size': '2048,2048',  # Higher resolution
+            'size': f'{pixels_width},{pixels_height}',  # Resolution-appropriate size
             'imageSR': '4326',  # Return in WGS84 to avoid coordinate expansion
             'format': 'tiff',
             'pixelType': 'F32',
@@ -1774,6 +1811,14 @@ downloader = TerrainDownloader()
 def index():
     return render_template('index.html')
 
+@app.route('/api/resolutions')
+def get_resolutions():
+    """Get available DEM resolutions"""
+    return jsonify({
+        'available_resolutions': downloader.available_resolutions,
+        'default_resolution': 10
+    })
+
 @app.route('/api/download', methods=['POST'])
 def start_download():
     try:
@@ -1791,7 +1836,11 @@ def start_download():
         
         include_elevation = data.get('include_elevation', True)
         include_imagery = data.get('include_imagery', True)
+        dem_resolution = data.get('dem_resolution', 10)  # Default to 10m
         job_id = str(uuid.uuid4())
+        
+        # Set the resolution for this download
+        downloader.set_resolution(dem_resolution)
         
         thread = threading.Thread(
             target=downloader.process_terrain_request,

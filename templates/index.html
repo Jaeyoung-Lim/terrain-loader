@@ -248,6 +248,42 @@
             color: #234e52;
         }
 
+        .resolution-group {
+            margin-top: 10px;
+        }
+
+        .resolution-select {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            background: white;
+            font-size: 0.9rem;
+            color: #2d3748;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+
+        .resolution-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .resolution-info {
+            margin-top: 8px;
+            padding: 8px;
+            background: #f7fafc;
+            border-radius: 6px;
+            border-left: 3px solid #667eea;
+        }
+
+        .resolution-info small {
+            color: #4a5568;
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+
         .data-info {
             background: #e6fffa;
             border: 1px solid #81e6d9;
@@ -356,6 +392,21 @@
                             <label for="imagery">
                                 <i class="fas fa-satellite"></i> Orthoimagery (Aerial Photos)
                             </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-section" id="resolutionSection">
+                    <h3><i class="fas fa-ruler"></i> DEM Resolution</h3>
+                    <div class="resolution-group">
+                        <select id="demResolution" class="resolution-select">
+                            <option value="1">1m - Highest detail (urban areas)</option>
+                            <option value="3">3m - High detail (good coverage)</option>
+                            <option value="10" selected>10m - Standard detail (default)</option>
+                            <option value="30">30m - Lower detail (small files)</option>
+                        </select>
+                        <div class="resolution-info">
+                            <small><i class="fas fa-info-circle"></i> Higher resolutions provide more detail but larger file sizes. 1m may not be available in all areas.</small>
                         </div>
                     </div>
                 </div>
@@ -494,10 +545,13 @@
             document.getElementById('progressText').textContent = 'Preparing download...';
             document.getElementById('statusMessage').innerHTML = '';
 
+            const demResolution = parseInt(document.getElementById('demResolution').value);
+            
             const requestData = {
                 ...selectedBounds,
                 include_elevation: includeElevation,
-                include_imagery: includeImagery
+                include_imagery: includeImagery,
+                dem_resolution: demResolution
             };
 
             fetch('/api/download', {
@@ -639,10 +693,23 @@
         }
 
         // Initialize when page loads
+        // Show/hide resolution section based on elevation checkbox
+        function toggleResolutionSection() {
+            const elevationChecked = document.getElementById('elevation').checked;
+            const resolutionSection = document.getElementById('resolutionSection');
+            resolutionSection.style.display = elevationChecked ? 'block' : 'none';
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
             
             document.getElementById('downloadBtn').addEventListener('click', startDownload);
+            
+            // Add event listener for elevation checkbox
+            document.getElementById('elevation').addEventListener('change', toggleResolutionSection);
+            
+            // Initial state
+            toggleResolutionSection();
         });
     </script>
 </body>
