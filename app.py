@@ -60,8 +60,25 @@ class TerrainDownloader:
             utm_width = abs(xmax - xmin)
             utm_height = abs(ymax - ymin)
             
-            width = max(256, min(4096, int(utm_width / self.pixel_size)))
-            height = max(256, min(4096, int(utm_height / self.pixel_size)))
+            # Calculate natural pixel dimensions
+            natural_width = int(utm_width / self.pixel_size)
+            natural_height = int(utm_height / self.pixel_size)
+            
+            # Use adaptive minimum constraints to avoid massive expansion for small areas
+            # For very small areas, use a smaller minimum to preserve user intent
+            min_pixels = 16 if (natural_width < 16 or natural_height < 16) else 32
+            
+            # Apply constraints: minimum adaptive, maximum 4096 pixels
+            width = max(min_pixels, min(4096, natural_width))
+            height = max(min_pixels, min(4096, natural_height))
+            
+            # Log if constraints are applied
+            if width != natural_width or height != natural_height:
+                logger.info(f"Applied size constraints: {natural_width}x{natural_height} → {width}x{height}")
+                expansion_factor = (width * height) / (natural_width * natural_height) if natural_width > 0 and natural_height > 0 else 1
+                if expansion_factor > 2:
+                    logger.warning(f"Area expansion: {expansion_factor:.1f}x due to minimum size constraints")
+                    logger.info(f"Consider selecting a larger area to avoid expansion")
             
             # Snap to exact pixel boundaries to eliminate sub-pixel misalignment
             xmin_snapped = np.floor(xmin / self.pixel_size) * self.pixel_size
@@ -1148,16 +1165,12 @@ class TerrainDownloader:
     
     def _try_single_elevation_download(self, bounds, job_id, service_urls):
         """Try downloading elevation as a single tile"""
-        # Convert bounds to Web Mercator for the service
-        transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-        xmin, ymin = transformer.transform(bounds['west'], bounds['south'])
-        xmax, ymax = transformer.transform(bounds['east'], bounds['north'])
-        
+        # Use WGS84 coordinates directly for exact bounding box match
         params = {
-            'bbox': f"{xmin},{ymin},{xmax},{ymax}",
-            'bboxSR': '3857',
+            'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+            'bboxSR': '4326',  # WGS84 for exact coordinate match
             'size': '2048,2048',  # Higher resolution
-            'imageSR': '3857',
+            'imageSR': '4326',  # Return in WGS84 to avoid coordinate expansion
             'format': 'tiff',
             'pixelType': 'F32',
             'interpolation': 'RSP_BilinearInterpolation',
@@ -1372,23 +1385,19 @@ class TerrainDownloader:
                 "https://carto.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export"
             ]
             
-            # Convert bounds to Web Mercator
-            transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-            xmin, ymin = transformer.transform(bounds['west'], bounds['south'])
-            xmax, ymax = transformer.transform(bounds['east'], bounds['north'])
-            
+            # Use WGS84 coordinates directly for exact bounding box match
             # Try each service URL
             for i, service_url in enumerate(service_urls):
                 try:
                     logger.info(f"Trying imagery service {i+1}/{len(service_urls)}")
                     
                     if "ImageServer" in service_url:
-                        # ImageServer parameters
+                        # ImageServer parameters - use WGS84 for exact bounds
                         params = {
-                            'bbox': f"{xmin},{ymin},{xmax},{ymax}",
-                            'bboxSR': '3857',
+                            'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+                            'bboxSR': '4326',  # WGS84 for exact coordinate match
                             'size': '2048,2048',  # Higher resolution
-                            'imageSR': '3857',
+                            'imageSR': '4326',  # Return in WGS84 to avoid coordinate expansion
                             'format': 'tiff',
                             'pixelType': 'U8',
                             'noData': '',
@@ -1396,12 +1405,12 @@ class TerrainDownloader:
                             'f': 'image'
                         }
                     else:
-                        # MapServer parameters
+                        # MapServer parameters - use WGS84 for exact bounds
                         params = {
-                            'bbox': f"{xmin},{ymin},{xmax},{ymax}",
-                            'bboxSR': '3857',
+                            'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+                            'bboxSR': '4326',  # WGS84 for exact coordinate match
                             'size': '2048,2048',  # Higher resolution
-                            'imageSR': '3857',
+                            'imageSR': '4326',  # Return in WGS84 to avoid coordinate expansion
                             'format': 'tiff',
                             'f': 'image'
                         }
@@ -1480,16 +1489,12 @@ class TerrainDownloader:
             # Use ESRI World Imagery as alternative
             service_url = "https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/export"
             
-            # Convert bounds to Web Mercator
-            transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-            xmin, ymin = transformer.transform(bounds['west'], bounds['south'])
-            xmax, ymax = transformer.transform(bounds['east'], bounds['north'])
-            
+            # Use WGS84 coordinates directly for exact bounding box match
             params = {
-                'bbox': f"{xmin},{ymin},{xmax},{ymax}",
-                'bboxSR': '3857',
+                'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+                'bboxSR': '4326',  # WGS84 for exact coordinate match
                 'size': '2048,2048',
-                'imageSR': '3857',
+                'imageSR': '4326',  # Return in WGS84 to avoid coordinate expansion
                 'format': 'tiff',
                 'f': 'image'
             }
