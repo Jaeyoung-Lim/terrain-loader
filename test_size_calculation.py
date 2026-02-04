@@ -103,3 +103,7 @@ if __name__ == "__main__":
     print("- Compression factor of 40% applied (typical for TIFF LZW)")
     print("- Actual sizes may vary based on data complexity and compression")
     print("- Geographic calculations are approximate")
+
+
+
+

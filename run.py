@@ -9,14 +9,26 @@ import subprocess
 import os
 
 def check_dependencies():
-    """Check if required dependencies are installed"""
+    """Check if required dependencies are installed with compatible versions"""
     try:
         import flask
-        import rasterio
         import requests
         import numpy
         import pyproj
-        print("✅ All dependencies found")
+        
+        # Check numpy version BEFORE importing rasterio
+        # rasterio 1.3.x requires numpy<2.0
+        numpy_major = int(numpy.__version__.split('.')[0])
+        if numpy_major >= 2:
+            print(f"❌ NumPy version conflict: numpy {numpy.__version__} is installed")
+            print("   rasterio 1.3.x requires numpy<2.0")
+            print("")
+            print("Fix with: pip install 'numpy==1.26.4' --force-reinstall")
+            print("Or reinstall all deps: pip install -r requirements.txt --force-reinstall")
+            return False
+        
+        import rasterio
+        print(f"✅ All dependencies found (numpy {numpy.__version__})")
         return True
     except ImportError as e:
         print(f"❌ Missing dependency: {e}")

@@ -356,6 +356,50 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.1) !important;
         }
 
+        .file-upload-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .upload-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(56, 161, 105, 0.4);
+        }
+
+        .mission-file-name {
+            font-size: 0.85rem;
+            color: #4a5568;
+            font-style: italic;
+            padding: 5px;
+            min-height: 20px;
+        }
+
+        .mission-file-name.loaded {
+            color: #2f855a;
+            font-weight: 500;
+        }
+
+        .geofence-polygon {
+            stroke: #e53e3e;
+            stroke-width: 3;
+            fill: #e53e3e;
+            fill-opacity: 0.1;
+        }
+
         @media (max-width: 1200px) {
             .main-content {
                 grid-template-columns: 1fr;
@@ -398,7 +442,18 @@
             <div class="controls-panel">
                 <div class="selection-info">
                     <i class="fas fa-info-circle"></i>
-                    Use the rectangle tool on the map to select the area for data download.
+                    Use the rectangle tool on the map to select the area, or load a QGroundControl mission file.
+                </div>
+
+                <div class="control-section">
+                    <h3><i class="fas fa-file-upload"></i> Load Mission File</h3>
+                    <div class="file-upload-container">
+                        <input type="file" id="missionFileInput" accept=".plan,.json" style="display: none;">
+                        <button class="upload-btn" id="uploadBtn" onclick="document.getElementById('missionFileInput').click()">
+                            <i class="fas fa-plane"></i> Load QGC Mission (.plan)
+                        </button>
+                        <div id="missionFileName" class="mission-file-name"></div>
+                    </div>
                 </div>
 
                 <div id="dataInfo" class="data-info">
@@ -498,18 +553,192 @@
     <script>
         let map;
         let drawnItems;
+        let geofenceLayer = null;
         let selectedBounds = null;
         let currentJobId = null;
         let statusCheckInterval = null;
+
+        // Parse QGroundControl mission file and extract geofence
+        function parseMissionFile(fileContent) {
+            try {
+                const mission = JSON.parse(fileContent);
+                
+                // Check for geofence in the mission file
+                // QGC plan files have geoFence object with polygons array
+                if (mission.geoFence && mission.geoFence.polygons && mission.geoFence.polygons.length > 0) {
+                    // Get the first polygon (inclusion fence)
+                    const polygon = mission.geoFence.polygons[0];
+                    if (polygon.polygon && polygon.polygon.length > 0) {
+                        const coordinates = polygon.polygon.map(coord => [coord[0], coord[1]]);
+                        return { type: 'polygon', coordinates: coordinates };
+                    }
+                }
+                
+                // Alternative format: check for rallyPoints or other geofence formats
+                if (mission.geoFence && mission.geoFence.circles && mission.geoFence.circles.length > 0) {
+                    const circle = mission.geoFence.circles[0];
+                    return { 
+                        type: 'circle', 
+                        center: [circle.circle.center[0], circle.circle.center[1]], 
+                        radius: circle.circle.radius 
+                    };
+                }
+
+                // If no geofence, try to extract bounds from mission items (waypoints)
+                if (mission.mission && mission.mission.items && mission.mission.items.length > 0) {
+                    const coords = [];
+                    mission.mission.items.forEach(item => {
+                        // Command 16 is NAV_WAYPOINT, also check for other nav commands
+                        if (item.params && item.params.length >= 7) {
+                            const lat = item.params[4];
+                            const lon = item.params[5];
+                            if (lat !== 0 && lon !== 0 && !isNaN(lat) && !isNaN(lon)) {
+                                coords.push([lat, lon]);
+                            }
+                        }
+                        // Alternative: autoContinue items with coordinate property
+                        if (item.coordinate && item.coordinate.length >= 2) {
+                            const lat = item.coordinate[0];
+                            const lon = item.coordinate[1];
+                            if (lat !== 0 && lon !== 0) {
+                                coords.push([lat, lon]);
+                            }
+                        }
+                    });
+                    
+                    if (coords.length > 0) {
+                        return { type: 'waypoints', coordinates: coords };
+                    }
+                }
+
+                return null;
+            } catch (e) {
+                console.error('Error parsing mission file:', e);
+                return null;
+            }
+        }
+
+        function handleMissionFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                const geofenceData = parseMissionFile(content);
+
+                if (geofenceData) {
+                    applyGeofenceBounds(geofenceData, file.name);
+                } else {
+                    showStatus('No geofence or waypoints found in mission file.', 'error');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function applyGeofenceBounds(geofenceData, fileName) {
+            // Clear existing drawings
+            drawnItems.clearLayers();
+            if (geofenceLayer) {
+                map.removeLayer(geofenceLayer);
+                geofenceLayer = null;
+            }
+
+            let bounds;
+            let displayLayer;
+
+            if (geofenceData.type === 'polygon' || geofenceData.type === 'waypoints') {
+                // Convert coordinates to Leaflet format [lat, lng]
+                const latLngs = geofenceData.coordinates.map(coord => L.latLng(coord[0], coord[1]));
+                
+                // Create polygon layer to display the geofence
+                if (geofenceData.type === 'polygon') {
+                    displayLayer = L.polygon(latLngs, {
+                        color: '#e53e3e',
+                        weight: 3,
+                        fillOpacity: 0.15,
+                        dashArray: '5, 10'
+                    });
+                } else {
+                    // For waypoints, just show markers and a polyline
+                    displayLayer = L.polyline(latLngs, {
+                        color: '#3182ce',
+                        weight: 2,
+                        dashArray: '5, 5'
+                    });
+                }
+                
+                // Calculate bounding box
+                bounds = L.latLngBounds(latLngs);
+                
+            } else if (geofenceData.type === 'circle') {
+                const center = L.latLng(geofenceData.center[0], geofenceData.center[1]);
+                displayLayer = L.circle(center, {
+                    radius: geofenceData.radius,
+                    color: '#e53e3e',
+                    weight: 3,
+                    fillOpacity: 0.15,
+                    dashArray: '5, 10'
+                });
+                bounds = displayLayer.getBounds();
+            }
+
+            if (displayLayer && bounds) {
+                // Add the geofence visualization to the map
+                geofenceLayer = displayLayer;
+                geofenceLayer.addTo(map);
+
+                // Create a rectangle from the bounds and add to drawnItems
+                const boundingRect = L.rectangle(bounds, {
+                    color: '#667eea',
+                    weight: 3,
+                    fillOpacity: 0.2
+                });
+                drawnItems.addLayer(boundingRect);
+
+                // Update the selected bounds
+                updateBounds(bounds);
+
+                // Zoom to the area
+                map.fitBounds(bounds, { padding: [50, 50] });
+
+                // Update file name display
+                const fileNameDisplay = document.getElementById('missionFileName');
+                fileNameDisplay.textContent = `✓ Loaded: ${fileName}`;
+                fileNameDisplay.classList.add('loaded');
+
+                showStatus(`Geofence loaded from ${fileName}. Bounding box created.`, 'success');
+            }
+        }
 
         // Initialize map
         function initMap() {
             map = L.map('map').setView([39.8283, -98.5795], 4); // Center of USA
 
-            // Add tile layer
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
+            // Add satellite imagery layer (below)
+            const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
             }).addTo(map);
+
+            // Add OpenStreetMap labels layer (above satellite)
+            const labelsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                opacity: 0.5
+            }).addTo(map);
+
+            // Add layer control to toggle between views
+            const baseMaps = {
+                "Satellite": satelliteLayer,
+                "OpenStreetMap": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                })
+            };
+            
+            const overlayMaps = {
+                "Labels": labelsLayer
+            };
+            
+            L.control.layers(baseMaps, overlayMaps).addTo(map);
 
             // Initialize draw controls
             drawnItems = new L.FeatureGroup();
@@ -891,6 +1120,9 @@
             
             // Add event listener for resolution changes
             document.getElementById('demResolution').addEventListener('change', updateSizeEstimate);
+            
+            // Add event listener for mission file upload
+            document.getElementById('missionFileInput').addEventListener('change', handleMissionFile);
             
             // Initial state
             toggleResolutionSection();

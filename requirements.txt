@@ -1,8 +1,13 @@
+# Pinned versions to prevent dependency oscillation
+# rasterio 1.3.9 requires numpy<2.0
+
 Flask==3.0.0
 Flask-CORS==4.0.0
-rasterio==1.3.9
-requests==2.31.0
-numpy>=1.24.3,<2.0
-pyproj==3.6.1
-scipy>=1.10.0
 Werkzeug==3.0.1
+requests==2.31.0
+
+# Core geospatial - MUST use numpy<2 for rasterio 1.3.x compatibility
+numpy==1.26.4
+rasterio==1.3.9
+pyproj==3.6.1
+scipy==1.11.4

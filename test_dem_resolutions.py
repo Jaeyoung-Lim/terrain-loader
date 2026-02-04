@@ -195,3 +195,7 @@ if __name__ == "__main__":
     print("- 3m resolution has broader coverage than 1m")
     print("- 10m resolution has nationwide coverage")
     print("=" * 60)
+
+
+
+

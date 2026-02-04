@@ -66,3 +66,7 @@ if __name__ == "__main__":
     print("- Small areas (< 1km): shown in meters")
     print("- Medium areas (< 10km): shown in km with 1 decimal")
     print("- Large areas (≥ 10km): shown in km with no decimals")
+
+
+
+
