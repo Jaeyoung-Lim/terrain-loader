@@ -6,8 +6,9 @@ A web-based application for downloading terrain elevation and orthoimagery data 
 
 - **Interactive Web Interface**: Select download areas using an intuitive map interface
 - **Multiple Data Sources**: 
-  - Elevation data from USGS 3DEP (3D Elevation Program)
-  - Orthoimagery from USGS NAIP (National Agriculture Imagery Program)
+  - **USA**: Elevation data from USGS 3DEP, Orthoimagery from USGS NAIP
+  - **Switzerland**: Orthoimagery from SwissTopo SWISSIMAGE, Elevation from ESRI World Elevation
+  - **Global Fallback**: ESRI World Elevation and World Imagery for other regions
 - **UTM Projection**: Automatically reprojects data to the appropriate UTM zone based on the selected area
 - **GeoTIFF Output**: Saves data as industry-standard GeoTIFF files
 - **Progress Tracking**: Real-time download progress monitoring
@@ -70,6 +71,16 @@ The application will start on `http://localhost:5000`
    - Monitor the progress in real-time
    - Download the ZIP file when completed
 
+### Regional Data Source Selection
+
+The application **automatically detects your region** and selects the best available data sources:
+
+- **United States**: Uses USGS 3DEP for elevation and USGS NAIP for orthoimagery (highest quality)
+- **Switzerland**: Uses SWISSIMAGE for orthoimagery and ESRI World Elevation for DEM
+- **Other Regions**: Falls back to ESRI World Elevation and World Imagery (global coverage)
+
+No configuration needed - just select your area and the app handles the rest!
+
 ### Output Files
 
 The downloaded ZIP file contains:
@@ -118,16 +129,48 @@ DELETE /api/cleanup/{job_id}
 
 ## Data Sources
 
-### Elevation Data (USGS 3DEP)
+The application automatically selects the best data sources based on your selected area:
+
+### United States
+
+**Elevation Data (USGS 3DEP)**
 - **Source**: USGS 3D Elevation Program
 - **Resolution**: Varies by location (typically 1/3 arc-second ~10m)
 - **Coverage**: United States
 - **Format**: 32-bit floating point elevation values in meters
 
-### Orthoimagery (USGS NAIP)
+**Orthoimagery (USGS NAIP)**
 - **Source**: USGS National Agriculture Imagery Program
 - **Resolution**: 1-meter ground sample distance
 - **Coverage**: United States (updated every 2-3 years)
+- **Format**: 8-bit RGB imagery
+
+### Switzerland
+
+**Orthoimagery (SwissTopo SWISSIMAGE)**
+- **Source**: Swiss Federal Office of Topography (SwissTopo)
+- **Resolution**: 10cm to 25cm ground sample distance
+- **Coverage**: Switzerland and Liechtenstein
+- **Format**: 8-bit RGB orthophotos
+- **Service**: WMS service at wms.geo.admin.ch
+- **Attribution**: ©SwissTopo
+
+**Elevation Data**
+- **Source**: ESRI World Elevation (global DEM with excellent Switzerland coverage)
+- **Resolution**: ~10m
+- **Format**: 32-bit floating point elevation values in meters
+- **Note**: SwissTopo's SwissALTI3D provides 0.5m-2m resolution but requires direct tile download (not available via WMS for raw elevation data)
+
+### Global (Fallback)
+
+**ESRI World Elevation**
+- **Coverage**: Global
+- **Resolution**: Varies (typically 10-30m)
+- **Format**: 32-bit floating point
+
+**ESRI World Imagery**
+- **Coverage**: Global
+- **Resolution**: Varies (typically 0.3m-1m in populated areas)
 - **Format**: 8-bit RGB imagery
 
 ## UTM Projection

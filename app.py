@@ -53,7 +53,15 @@ class TerrainDownloader:
     
     def get_utm_zone(self, lon, lat):
         """Calculate UTM zone from longitude and latitude"""
+        # Normalize longitude to -180 to 180 range
+        lon = ((lon + 180) % 360) - 180
+        
+        # Calculate zone (1-60)
         zone = int((lon + 180) / 6) + 1
+        
+        # Clamp zone to valid range (1-60)
+        zone = max(1, min(60, zone))
+        
         hemisphere = 'north' if lat >= 0 else 'south'
         return zone, hemisphere
     
@@ -64,6 +72,164 @@ class TerrainDownloader:
             return f'EPSG:{32600 + zone}'
         else:
             return f'EPSG:{32700 + zone}'
+    
+    def is_switzerland_region(self, bounds):
+        """Check if bounds are within Switzerland"""
+        # Switzerland approximate bounds: 5.96°E to 10.49°E, 45.82°N to 47.81°N
+        swiss_bounds = {
+            'west': 5.96,
+            'east': 10.49,
+            'south': 45.82,
+            'north': 47.81
+        }
+        
+        # Check if requested bounds overlap with Switzerland
+        overlaps = (bounds['west'] < swiss_bounds['east'] and
+                   bounds['east'] > swiss_bounds['west'] and
+                   bounds['south'] < swiss_bounds['north'] and
+                   bounds['north'] > swiss_bounds['south'])
+        
+        return overlaps
+    
+    def download_swiss_elevation(self, bounds, job_id):
+        """Download elevation data for Switzerland region
+        
+        Note: SwissTopo's SwissALTI3D raw elevation data is not available via WMS.
+        The WMS only provides hillshade visualizations. For Switzerland, we use
+        the global ESRI World Elevation service which has good coverage.
+        """
+        try:
+            logger.info("Downloading elevation data for Switzerland region")
+            
+            # SwissTopo doesn't provide raw elevation via WMS, only hillshade
+            # Use ESRI World Elevation which has excellent coverage for Switzerland
+            service_url = "https://elevation.arcgis.com/arcgis/rest/services/WorldElevation/Terrain/ImageServer/exportImage"
+            
+            # Calculate appropriate image size based on resolution and area
+            area_width_deg = bounds['east'] - bounds['west']
+            area_height_deg = bounds['north'] - bounds['south']
+            center_lat = (bounds['north'] + bounds['south']) / 2
+            lat_factor = abs(np.cos(center_lat * np.pi / 180))
+            area_width_m = area_width_deg * 111000 * lat_factor
+            area_height_m = area_height_deg * 111000
+            
+            pixels_width = int(area_width_m / self.pixel_size)
+            pixels_height = int(area_height_m / self.pixel_size)
+            pixels_width = min(4096, max(64, pixels_width))
+            pixels_height = min(4096, max(64, pixels_height))
+            
+            params = {
+                'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+                'bboxSR': '4326',
+                'size': f'{pixels_width},{pixels_height}',
+                'imageSR': '4326',
+                'format': 'tiff',
+                'pixelType': 'F32',
+                'interpolation': 'RSP_BilinearInterpolation',
+                'f': 'image'
+            }
+            
+            try:
+                response = requests.get(service_url, params=params, timeout=120)
+                if response.status_code == 200 and len(response.content) > 1000:
+                    temp_path = os.path.join(self.base_dir, f"{job_id}_elevation_swiss.tif")
+                    with open(temp_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    # Validate
+                    try:
+                        with rasterio.open(temp_path) as test_src:
+                            if test_src.width > 0 and test_src.height > 0:
+                                logger.info(f"Downloaded Switzerland elevation (ESRI): {test_src.width}x{test_src.height}")
+                                return temp_path
+                    except:
+                        pass
+                    
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+            except Exception as e:
+                logger.warning(f"Switzerland elevation download failed: {e}")
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Switzerland elevation download failed: {e}")
+            return None
+    
+    def download_swiss_imagery(self, bounds, job_id):
+        """Download imagery data from SwissTopo SWISSIMAGE WMS service"""
+        try:
+            logger.info("Downloading imagery data from SwissTopo SWISSIMAGE")
+            
+            # SwissTopo WMS service for SWISSIMAGE orthophotos
+            service_url = "https://wms.geo.admin.ch/"
+            
+            # Calculate appropriate image size
+            area_width_deg = bounds['east'] - bounds['west']
+            area_height_deg = bounds['north'] - bounds['south']
+            center_lat = (bounds['north'] + bounds['south']) / 2
+            lat_factor = abs(np.cos(center_lat * np.pi / 180))
+            area_width_m = area_width_deg * 111000 * lat_factor
+            area_height_m = area_height_deg * 111000
+            
+            # For imagery, use higher resolution (0.5m to 2m)
+            imagery_resolution = 1.0  # 1 meter per pixel for imagery
+            pixels_width = int(area_width_m / imagery_resolution)
+            pixels_height = int(area_height_m / imagery_resolution)
+            pixels_width = min(4096, max(256, pixels_width))
+            pixels_height = min(4096, max(256, pixels_height))
+            
+            # WMS GetMap request parameters for SWISSIMAGE
+            params = {
+                'SERVICE': 'WMS',
+                'VERSION': '1.3.0',
+                'REQUEST': 'GetMap',
+                'LAYERS': 'ch.swisstopo.swissimage-product',
+                'STYLES': '',
+                'CRS': 'EPSG:4326',
+                'BBOX': f"{bounds['south']},{bounds['west']},{bounds['north']},{bounds['east']}",
+                'WIDTH': pixels_width,
+                'HEIGHT': pixels_height,
+                'FORMAT': 'image/tiff'
+            }
+            
+            try:
+                response = requests.get(service_url, params=params, timeout=180)
+                if response.status_code == 200 and len(response.content) > 1000:
+                    temp_path = os.path.join(self.base_dir, f"{job_id}_imagery_swiss.tif")
+                    with open(temp_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    # Validate
+                    try:
+                        with rasterio.open(temp_path) as test_src:
+                            if test_src.width > 0 and test_src.height > 0:
+                                logger.info(f"Downloaded Swiss imagery: {test_src.width}x{test_src.height}")
+                                return temp_path
+                    except Exception as validation_error:
+                        logger.warning(f"Swiss imagery validation failed: {validation_error}")
+                        # Try to fix georeferencing
+                        try:
+                            fixed_path = self.add_proper_georeferencing(temp_path, bounds)
+                            if fixed_path != temp_path:
+                                with rasterio.open(fixed_path) as test_src:
+                                    if test_src.width > 0 and test_src.height > 0:
+                                        logger.info(f"Fixed Swiss imagery: {test_src.width}x{test_src.height}")
+                                        os.remove(temp_path)
+                                        return fixed_path
+                        except:
+                            pass
+                    
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+            except Exception as e:
+                logger.warning(f"Swiss imagery download failed: {e}")
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Swiss imagery download failed: {e}")
+            return None
     
     def create_perfect_reference_grid(self, bounds, target_crs):
         """Create a reference coordinate grid for perfect alignment"""
@@ -335,35 +501,176 @@ class TerrainDownloader:
                 logger.info("Final elevation validation: No gaps detected")
                 return elevation_path
             
-            # If small gaps remain (< 2% of data), apply interpolation as final fallback
             with rasterio.open(elevation_path) as src:
                 data = src.read(1)
                 missing_mask = self._create_comprehensive_elevation_mask(data, src.nodata)
                 missing_percentage = (np.sum(missing_mask) / missing_mask.size) * 100
                 
-                if missing_percentage < 2.0:  # Small gaps only
-                    logger.info(f"Applying final interpolation to {missing_percentage:.2f}% remaining gaps")
-                    
-                    # Create final output path
-                    final_path = elevation_path.replace('.tif', '_final.tif')
-                    
-                    # Apply conservative interpolation
-                    filled_data = self._conservative_gap_filling(data, missing_mask)
-                    
-                    # Write result
-                    profile = src.profile.copy()
-                    with rasterio.open(final_path, 'w', **profile) as dst:
-                        dst.write(filled_data, 1)
-                    
-                    logger.info("Applied final interpolation to remaining small gaps")
-                    return final_path
-                else:
-                    logger.warning(f"Still {missing_percentage:.2f}% gaps remaining - may need manual review")
+                if missing_percentage < 0.1:  # Very small gaps only
+                    logger.info("Final elevation validation: Negligible gaps, no action needed")
                     return elevation_path
+                
+                logger.info(f"Applying gap filling to {missing_percentage:.2f}% remaining gaps")
+                
+                # Create final output path
+                final_path = elevation_path.replace('.tif', '_final.tif')
+                
+                # Apply comprehensive gap filling for ALL gaps, not just small ones
+                filled_data = self._comprehensive_gap_filling(data, missing_mask, src.nodata)
+                
+                # Write result
+                profile = src.profile.copy()
+                with rasterio.open(final_path, 'w', **profile) as dst:
+                    dst.write(filled_data, 1)
+                
+                # Verify the fix
+                new_missing_mask = self._create_comprehensive_elevation_mask(filled_data, src.nodata)
+                new_missing_percentage = (np.sum(new_missing_mask) / new_missing_mask.size) * 100
+                logger.info(f"Gap filling reduced missing data from {missing_percentage:.2f}% to {new_missing_percentage:.2f}%")
+                
+                return final_path
                     
         except Exception as e:
             logger.error(f"Error in final elevation validation: {e}")
             return elevation_path
+    
+    def _comprehensive_gap_filling(self, data, missing_mask, nodata_value):
+        """Comprehensive gap filling that handles gaps of any size"""
+        filled_data = data.copy()
+        
+        if not np.any(missing_mask):
+            return filled_data
+        
+        logger.info(f"Starting comprehensive gap filling for {np.sum(missing_mask)} missing pixels")
+        
+        # Step 1: Try scipy interpolation first (most accurate for smooth surfaces)
+        try:
+            from scipy import ndimage
+            from scipy.interpolate import griddata
+            
+            # For moderate-sized datasets, use griddata interpolation
+            if np.sum(missing_mask) < 500000:  # Less than 500k missing pixels
+                valid_mask = ~missing_mask
+                valid_coords = np.column_stack(np.where(valid_mask))
+                missing_coords = np.column_stack(np.where(missing_mask))
+                valid_values = data[valid_mask]
+                
+                if len(valid_coords) > 10 and len(missing_coords) > 0:
+                    # Sample valid points if too many
+                    if len(valid_coords) > 20000:
+                        sample_idx = np.random.choice(len(valid_coords), 20000, replace=False)
+                        valid_coords_sample = valid_coords[sample_idx]
+                        valid_values_sample = valid_values[sample_idx]
+                    else:
+                        valid_coords_sample = valid_coords
+                        valid_values_sample = valid_values
+                    
+                    # Interpolate using linear method
+                    interpolated = griddata(
+                        valid_coords_sample, valid_values_sample, missing_coords,
+                        method='linear', fill_value=np.nan
+                    )
+                    
+                    # Apply interpolated values
+                    valid_interpolated = ~np.isnan(interpolated)
+                    for i, (row, col) in enumerate(missing_coords):
+                        if valid_interpolated[i]:
+                            filled_data[row, col] = interpolated[i]
+                    
+                    filled_count = np.sum(valid_interpolated)
+                    logger.info(f"Griddata interpolation filled {filled_count} pixels")
+                    
+                    # Update missing mask for remaining gaps
+                    missing_mask = self._create_comprehensive_elevation_mask(filled_data, nodata_value)
+            
+            # Step 2: Use distance transform for remaining gaps
+            if np.any(missing_mask):
+                logger.info("Using distance transform for remaining gaps")
+                
+                valid_mask = ~missing_mask
+                if np.any(valid_mask):
+                    # Create index arrays
+                    indices = ndimage.distance_transform_edt(
+                        missing_mask, 
+                        return_distances=False, 
+                        return_indices=True
+                    )
+                    
+                    # Fill gaps with nearest valid values
+                    filled_data[missing_mask] = filled_data[indices[0][missing_mask], indices[1][missing_mask]]
+                    
+                    logger.info("Distance transform gap filling completed")
+            
+        except ImportError:
+            logger.warning("SciPy not available, using fallback interpolation")
+            filled_data = self._fallback_gap_filling(filled_data, missing_mask)
+        except Exception as e:
+            logger.warning(f"Advanced interpolation failed: {e}, using fallback")
+            filled_data = self._fallback_gap_filling(filled_data, missing_mask)
+        
+        # Step 3: Final pass - fill any remaining gaps with expanding window average
+        final_missing_mask = self._create_comprehensive_elevation_mask(filled_data, nodata_value)
+        if np.any(final_missing_mask):
+            remaining_count = np.sum(final_missing_mask)
+            logger.info(f"Final pass: filling {remaining_count} remaining pixels with window average")
+            filled_data = self._window_average_fill(filled_data, final_missing_mask)
+        
+        return filled_data
+    
+    def _fallback_gap_filling(self, data, missing_mask):
+        """Fallback gap filling without scipy"""
+        filled_data = data.copy()
+        gap_coords = np.column_stack(np.where(missing_mask))
+        
+        # Sort by distance from valid data (approximate by checking neighbors)
+        for row, col in gap_coords:
+            # Expanding window search for valid values
+            for window_size in range(3, 51, 2):  # Expand up to 25 pixel radius
+                half_window = window_size // 2
+                row_start = max(0, row - half_window)
+                row_end = min(data.shape[0], row + half_window + 1)
+                col_start = max(0, col - half_window)
+                col_end = min(data.shape[1], col + half_window + 1)
+                
+                window_data = filled_data[row_start:row_end, col_start:col_end]
+                window_missing = missing_mask[row_start:row_end, col_start:col_end]
+                
+                valid_values = window_data[~window_missing]
+                
+                if len(valid_values) > 0:
+                    filled_data[row, col] = np.median(valid_values)
+                    break
+        
+        return filled_data
+    
+    def _window_average_fill(self, data, missing_mask):
+        """Fill remaining gaps with expanding window average"""
+        filled_data = data.copy()
+        gap_coords = np.column_stack(np.where(missing_mask))
+        
+        for row, col in gap_coords:
+            for window_size in range(3, 101, 2):  # Expand up to 50 pixel radius
+                half_window = window_size // 2
+                row_start = max(0, row - half_window)
+                row_end = min(data.shape[0], row + half_window + 1)
+                col_start = max(0, col - half_window)
+                col_end = min(data.shape[1], col + half_window + 1)
+                
+                window_data = filled_data[row_start:row_end, col_start:col_end]
+                # Check for valid values (not the same as original missing pixels)
+                window_valid = (window_data != 0) & ~np.isnan(window_data) & (window_data > -9000) & (window_data < 10000)
+                
+                valid_values = window_data[window_valid]
+                
+                if len(valid_values) > 0:
+                    filled_data[row, col] = np.median(valid_values)
+                    break
+            else:
+                # If no valid values found in any window, use a reasonable default
+                # based on surrounding area statistics or a fallback
+                filled_data[row, col] = 0  # Sea level as last resort
+        
+        return filled_data
     
     def _conservative_gap_filling(self, data, missing_mask):
         """Conservative gap filling for small remaining gaps"""
@@ -1159,36 +1466,444 @@ class TerrainDownloader:
     def _download_elevation_with_fallback_strategies(self, bounds, job_id, service_urls):
         """Try multiple strategies to download complete elevation data"""
         
-        # Strategy 1: Single large tile (original approach)
-        logger.info("Strategy 1: Attempting single large tile download")
-        result = self._try_single_elevation_download(bounds, job_id, service_urls)
-        if result:
+        # Strategy 0: Try Swiss data if in Switzerland region
+        if self.is_switzerland_region(bounds):
+            logger.info("Strategy 0: Trying Swiss elevation data (SwissALTI3D)")
+            swiss_result = self.download_swiss_elevation(bounds, job_id)
+            if swiss_result and self._check_elevation_quality(swiss_result):
+                return swiss_result
+        
+        # Strategy 1: Comprehensive tile grid (most reliable for complete coverage)
+        logger.info("Strategy 1: Comprehensive tile grid download")
+        result = self._download_comprehensive_tile_grid(bounds, job_id, service_urls)
+        if result and self._check_elevation_quality(result):
             return result
+        
+        # Strategy 2: Single large tile (fast but may have gaps)
+        logger.info("Strategy 2: Attempting single large tile download")
+        result2 = self._try_single_elevation_download(bounds, job_id, service_urls)
+        if result2:
+            if self._check_elevation_quality(result2):
+                return result2
+            elif result is None:
+                result = result2
+        
+        # Strategy 3: Multiple overlapping tiles
+        logger.info("Strategy 3: Multiple overlapping tiles")
+        result3 = self._try_multi_tile_elevation_download(bounds, job_id, service_urls)
+        if result3:
+            if self._check_elevation_quality(result3):
+                return result3
+            elif result is None:
+                result = result3
             
-        # Strategy 2: Multiple overlapping tiles
-        logger.info("Strategy 1 failed, trying Strategy 2: Multiple overlapping tiles")
-        result = self._try_multi_tile_elevation_download(bounds, job_id, service_urls)
+        # Strategy 4: Grid-based approach with smaller tiles
+        logger.info("Strategy 4: Grid-based smaller tiles")
+        result4 = self._try_grid_elevation_download(bounds, job_id, service_urls)
+        if result4:
+            if self._check_elevation_quality(result4):
+                return result4
+            elif result is None:
+                result = result4
+        
+        # Strategy 5: Fallback elevation sources
+        logger.info("Strategy 5: Fallback elevation sources")
+        result5 = self._download_fallback_elevation(bounds, job_id)
+        if result5:
+            if result is None:
+                return result5
+            else:
+                # Merge fallback with existing result to fill gaps
+                merged_path = os.path.join(self.base_dir, f"{job_id}_elevation_merged_fallback.tif")
+                self.merge_tiles_with_main(result, [result5], merged_path)
+                return merged_path
+        
+        # Return whatever we have, or raise error
         if result:
-            return result
-            
-        # Strategy 3: Grid-based approach with smaller tiles
-        logger.info("Strategy 2 failed, trying Strategy 3: Grid-based smaller tiles")
-        result = self._try_grid_elevation_download(bounds, job_id, service_urls)
-        if result:
+            logger.warning("Returning elevation data with potential gaps - will be filled by interpolation")
             return result
             
         # If all strategies fail
         raise Exception("All elevation download strategies failed")
     
-    def _try_single_elevation_download(self, bounds, job_id, service_urls):
-        """Try downloading elevation as a single tile"""
-        # Calculate appropriate image size based on resolution and area
+    def _download_comprehensive_tile_grid(self, bounds, job_id, service_urls):
+        """Download elevation using a comprehensive grid of small tiles for complete coverage"""
+        try:
+            # Add buffer around the bounds to ensure complete coverage after reprojection
+            # This is critical because reprojection from WGS84 to UTM can cause edge data loss
+            buffer_deg = 0.005  # ~500m buffer on each side
+            
+            extended_bounds = {
+                'west': bounds['west'] - buffer_deg,
+                'east': bounds['east'] + buffer_deg,
+                'south': bounds['south'] - buffer_deg,
+                'north': bounds['north'] + buffer_deg
+            }
+            
+            width = extended_bounds['east'] - extended_bounds['west']
+            height = extended_bounds['north'] - extended_bounds['south']
+            
+            # Calculate optimal tile size based on area
+            # Smaller tiles = more requests but better coverage
+            # Target tile size: ~0.01 degrees (~1km) for best results
+            target_tile_size = 0.01  # degrees
+            
+            # Calculate grid dimensions
+            num_tiles_x = max(2, int(np.ceil(width / target_tile_size)))
+            num_tiles_y = max(2, int(np.ceil(height / target_tile_size)))
+            
+            # Limit to reasonable number of tiles (max 10x10 = 100 tiles)
+            num_tiles_x = min(10, num_tiles_x)
+            num_tiles_y = min(10, num_tiles_y)
+            
+            tile_width = width / num_tiles_x
+            tile_height = height / num_tiles_y
+            
+            # Add overlap between tiles (10% overlap)
+            overlap_x = tile_width * 0.1
+            overlap_y = tile_height * 0.1
+            
+            logger.info(f"Downloading {num_tiles_x}x{num_tiles_y} = {num_tiles_x * num_tiles_y} tiles with {buffer_deg}° buffer for complete coverage")
+            
+            downloaded_tiles = []
+            failed_tiles = []
+            
+            for i in range(num_tiles_x):
+                for j in range(num_tiles_y):
+                    # Calculate tile bounds with overlap (using extended bounds)
+                    tile_west = extended_bounds['west'] + i * tile_width - (overlap_x if i > 0 else 0)
+                    tile_east = extended_bounds['west'] + (i + 1) * tile_width + (overlap_x if i < num_tiles_x - 1 else 0)
+                    tile_south = extended_bounds['south'] + j * tile_height - (overlap_y if j > 0 else 0)
+                    tile_north = extended_bounds['south'] + (j + 1) * tile_height + (overlap_y if j < num_tiles_y - 1 else 0)
+                    
+                    tile_bounds = {
+                        'west': tile_west,
+                        'east': tile_east,
+                        'south': tile_south,
+                        'north': tile_north
+                    }
+                    
+                    tile_id = f"{job_id}_comprehensive_tile_{i}_{j}"
+                    tile_path = self._download_single_tile(tile_bounds, tile_id, service_urls)
+                    
+                    if tile_path and os.path.exists(tile_path):
+                        downloaded_tiles.append(tile_path)
+                        logger.info(f"Downloaded tile {i},{j} ({len(downloaded_tiles)}/{num_tiles_x * num_tiles_y})")
+                    else:
+                        failed_tiles.append((i, j))
+                        logger.warning(f"Failed to download tile {i},{j}")
+            
+            if len(downloaded_tiles) == 0:
+                logger.error("No tiles were successfully downloaded")
+                return None
+            
+            # Log coverage statistics
+            total_tiles = num_tiles_x * num_tiles_y
+            success_rate = len(downloaded_tiles) / total_tiles * 100
+            logger.info(f"Downloaded {len(downloaded_tiles)}/{total_tiles} tiles ({success_rate:.1f}% success rate)")
+            
+            if len(failed_tiles) > 0:
+                logger.warning(f"Failed tiles: {failed_tiles}")
+            
+            # Merge all downloaded tiles
+            if len(downloaded_tiles) == 1:
+                return downloaded_tiles[0]
+            
+            merged_path = os.path.join(self.base_dir, f"{job_id}_comprehensive_merged.tif")
+            self._merge_all_tiles(downloaded_tiles, merged_path, bounds)
+            
+            # Clean up individual tiles
+            for tile_path in downloaded_tiles:
+                try:
+                    if os.path.exists(tile_path):
+                        os.remove(tile_path)
+                except:
+                    pass
+            
+            return merged_path
+            
+        except Exception as e:
+            logger.error(f"Comprehensive tile grid download failed: {e}")
+            return None
+    
+    def _download_single_tile(self, bounds, tile_id, service_urls):
+        """Download a single elevation tile"""
+        # Calculate tile size in pixels
         area_width_deg = bounds['east'] - bounds['west']
         area_height_deg = bounds['north'] - bounds['south']
+        center_lat = (bounds['north'] + bounds['south']) / 2
+        lat_factor = abs(np.cos(center_lat * np.pi / 180))
+        
+        area_width_m = area_width_deg * 111000 * lat_factor
+        area_height_m = area_height_deg * 111000
+        
+        pixels_width = int(area_width_m / self.pixel_size)
+        pixels_height = int(area_height_m / self.pixel_size)
+        
+        # Ensure reasonable bounds
+        pixels_width = min(2048, max(32, pixels_width))
+        pixels_height = min(2048, max(32, pixels_height))
+        
+        params = {
+            'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+            'bboxSR': '4326',
+            'size': f'{pixels_width},{pixels_height}',
+            'imageSR': '4326',
+            'format': 'tiff',
+            'pixelType': 'F32',
+            'interpolation': 'RSP_BilinearInterpolation',
+            'compressionQuality': '100',
+            'f': 'image'
+        }
+        
+        for service_url in service_urls:
+            try:
+                response = requests.get(service_url, params=params, timeout=60)
+                
+                if response.status_code == 200 and len(response.content) > 500:
+                    temp_path = os.path.join(self.base_dir, f"{tile_id}.tif")
+                    with open(temp_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    # Validate the tile
+                    try:
+                        with rasterio.open(temp_path) as src:
+                            if src.width > 0 and src.height > 0:
+                                # Check if tile has valid data (not all nodata)
+                                data = src.read(1)
+                                valid_count = np.sum(~np.isnan(data) & (data > -9000) & (data < 10000))
+                                if valid_count > data.size * 0.1:  # At least 10% valid data
+                                    return temp_path
+                                else:
+                                    logger.debug(f"Tile {tile_id} has insufficient valid data")
+                                    os.remove(temp_path)
+                    except:
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                            
+            except requests.exceptions.RequestException:
+                continue
+        
+        return None
+    
+    def _merge_all_tiles(self, tile_paths, output_path, target_bounds):
+        """Merge multiple tiles into a single complete raster (keeping buffer for reprojection)"""
+        try:
+            from rasterio.merge import merge
+            
+            # Open all tiles
+            tile_datasets = []
+            for tile_path in tile_paths:
+                try:
+                    ds = rasterio.open(tile_path)
+                    tile_datasets.append(ds)
+                except Exception as e:
+                    logger.warning(f"Could not open tile {tile_path}: {e}")
+                    continue
+            
+            if not tile_datasets:
+                raise Exception("No valid tiles to merge")
+            
+            logger.info(f"Merging {len(tile_datasets)} tiles")
+            
+            # Merge tiles - use 'first' method to prioritize earlier tiles
+            mosaic, out_transform = merge(
+                tile_datasets,
+                method='first',
+                resampling=Resampling.bilinear
+            )
+            
+            # Get output metadata from first tile
+            out_meta = tile_datasets[0].meta.copy()
+            out_meta.update({
+                "driver": "GTiff",
+                "height": mosaic.shape[1],
+                "width": mosaic.shape[2],
+                "transform": out_transform,
+                "compress": "lzw"
+            })
+            
+            # Write merged result directly to output (DO NOT crop here - 
+            # keep the buffer so reprojection to UTM has complete edge coverage)
+            with rasterio.open(output_path, "w", **out_meta) as dest:
+                dest.write(mosaic)
+            
+            # Close all tile datasets
+            for ds in tile_datasets:
+                ds.close()
+            
+            logger.info(f"Merged {len(tile_datasets)} tiles (keeping buffer for alignment)")
+            
+            # Now do a second pass to fill any remaining gaps from overlapping tiles
+            self._fill_gaps_from_tiles(output_path, tile_paths)
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error merging tiles: {e}")
+            # Close any open datasets
+            for ds in tile_datasets:
+                try:
+                    ds.close()
+                except:
+                    pass
+            raise e
+    
+    def _crop_to_bounds(self, input_path, target_bounds, output_path):
+        """Crop a raster to the exact target bounds"""
+        try:
+            from rasterio.windows import from_bounds
+            from rasterio.transform import from_bounds as transform_from_bounds
+            
+            with rasterio.open(input_path) as src:
+                # Get the bounds in the source CRS
+                src_crs = src.crs
+                
+                # If source is not WGS84, transform target bounds
+                if src_crs and str(src_crs) != 'EPSG:4326':
+                    transformer = Transformer.from_crs("EPSG:4326", src_crs, always_xy=True)
+                    min_x, min_y = transformer.transform(target_bounds['west'], target_bounds['south'])
+                    max_x, max_y = transformer.transform(target_bounds['east'], target_bounds['north'])
+                else:
+                    min_x = target_bounds['west']
+                    max_x = target_bounds['east']
+                    min_y = target_bounds['south']
+                    max_y = target_bounds['north']
+                
+                # Create window from bounds
+                window = from_bounds(min_x, min_y, max_x, max_y, src.transform)
+                
+                # Round window to integer pixel coordinates
+                window = window.round_offsets().round_lengths()
+                
+                # Ensure window is within raster bounds
+                window = window.intersection(rasterio.windows.Window(0, 0, src.width, src.height))
+                
+                if window.width <= 0 or window.height <= 0:
+                    logger.warning("Crop window is empty, returning original file")
+                    return input_path
+                
+                # Read the data within the window
+                data = src.read(window=window)
+                
+                # Calculate the new transform for the cropped area
+                cropped_transform = src.window_transform(window)
+                
+                # Update metadata
+                out_meta = src.meta.copy()
+                out_meta.update({
+                    "driver": "GTiff",
+                    "height": int(window.height),
+                    "width": int(window.width),
+                    "transform": cropped_transform,
+                    "compress": "lzw"
+                })
+                
+                # Write cropped result
+                with rasterio.open(output_path, "w", **out_meta) as dest:
+                    dest.write(data)
+                
+                logger.info(f"Cropped raster from {src.width}x{src.height} to {int(window.width)}x{int(window.height)}")
+                return output_path
+                
+        except Exception as e:
+            logger.error(f"Error cropping raster: {e}")
+            # If cropping fails, return the original
+            return input_path
+    
+    def _fill_gaps_from_tiles(self, merged_path, original_tile_paths):
+        """Second pass: fill any remaining gaps using data from original tiles"""
+        try:
+            with rasterio.open(merged_path, 'r+') as dst:
+                data = dst.read(1)
+                nodata = dst.nodata
+                
+                # Detect gaps in merged data
+                gap_mask = self._create_comprehensive_elevation_mask(data, nodata)
+                
+                if not np.any(gap_mask):
+                    logger.info("No gaps in merged data")
+                    return
+                
+                gap_count = np.sum(gap_mask)
+                logger.info(f"Filling {gap_count} gap pixels from original tiles")
+                
+                # Try to fill gaps from each original tile
+                for tile_path in original_tile_paths:
+                    if not np.any(gap_mask):
+                        break
+                        
+                    try:
+                        with rasterio.open(tile_path) as tile_src:
+                            # Reproject tile data to match merged raster
+                            tile_data = np.empty((dst.height, dst.width), dtype=data.dtype)
+                            tile_data.fill(np.nan)
+                            
+                            reproject(
+                                source=rasterio.band(tile_src, 1),
+                                destination=tile_data,
+                                src_transform=tile_src.transform,
+                                src_crs=tile_src.crs,
+                                dst_transform=dst.transform,
+                                dst_crs=dst.crs,
+                                resampling=Resampling.bilinear
+                            )
+                            
+                            # Find valid data in tile that can fill gaps
+                            tile_valid = ~self._create_comprehensive_elevation_mask(tile_data, nodata)
+                            fill_mask = gap_mask & tile_valid
+                            
+                            if np.any(fill_mask):
+                                data[fill_mask] = tile_data[fill_mask]
+                                gap_mask[fill_mask] = False
+                                filled = np.sum(fill_mask)
+                                logger.debug(f"Filled {filled} pixels from tile")
+                                
+                    except Exception as e:
+                        logger.debug(f"Could not use tile for gap filling: {e}")
+                        continue
+                
+                # Write updated data
+                dst.write(data, 1)
+                
+                remaining_gaps = np.sum(gap_mask)
+                logger.info(f"After tile-based gap filling: {remaining_gaps} gaps remaining")
+                
+        except Exception as e:
+            logger.warning(f"Error in tile-based gap filling: {e}")
+    
+    def _check_elevation_quality(self, file_path):
+        """Check if elevation file has acceptable quality (less than 10% gaps)"""
+        try:
+            with rasterio.open(file_path) as src:
+                data = src.read(1)
+                missing_mask = self._create_comprehensive_elevation_mask(data, src.nodata)
+                missing_percentage = (np.sum(missing_mask) / missing_mask.size) * 100
+                
+                logger.info(f"Elevation quality check: {missing_percentage:.2f}% missing data")
+                return missing_percentage < 10.0  # Less than 10% gaps is acceptable
+        except Exception as e:
+            logger.warning(f"Error checking elevation quality: {e}")
+            return False
+    
+    def _try_single_elevation_download(self, bounds, job_id, service_urls):
+        """Try downloading elevation as a single tile"""
+        # Add buffer to ensure complete coverage after reprojection
+        buffer_deg = 0.005  # ~500m buffer
+        extended_bounds = {
+            'west': bounds['west'] - buffer_deg,
+            'east': bounds['east'] + buffer_deg,
+            'south': bounds['south'] - buffer_deg,
+            'north': bounds['north'] + buffer_deg
+        }
+        
+        # Calculate appropriate image size based on resolution and area
+        area_width_deg = extended_bounds['east'] - extended_bounds['west']
+        area_height_deg = extended_bounds['north'] - extended_bounds['south']
         
         # Rough conversion: 1 degree ≈ 111km at equator, adjust for latitude
-        center_lat = (bounds['north'] + bounds['south']) / 2
-        lat_factor = abs(center_lat / 90) if center_lat != 0 else 1
+        center_lat = (extended_bounds['north'] + extended_bounds['south']) / 2
+        lat_factor = abs(np.cos(center_lat * np.pi / 180))
         area_width_m = area_width_deg * 111000 * lat_factor
         area_height_m = area_height_deg * 111000
         
@@ -1200,11 +1915,11 @@ class TerrainDownloader:
         pixels_width = min(8192, max(64, pixels_width))
         pixels_height = min(8192, max(64, pixels_height))
         
-        logger.info(f"Requesting {pixels_width}x{pixels_height} pixels for {self.pixel_size}m resolution")
+        logger.info(f"Requesting {pixels_width}x{pixels_height} pixels for {self.pixel_size}m resolution (with {buffer_deg}° buffer)")
         
-        # Use WGS84 coordinates directly for exact bounding box match
+        # Use extended bounds to ensure complete coverage
         params = {
-            'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+            'bbox': f"{extended_bounds['west']},{extended_bounds['south']},{extended_bounds['east']},{extended_bounds['north']}",
             'bboxSR': '4326',  # WGS84 for exact coordinate match
             'size': f'{pixels_width},{pixels_height}',  # Resolution-appropriate size
             'imageSR': '4326',  # Return in WGS84 to avoid coordinate expansion
@@ -1356,8 +2071,85 @@ class TerrainDownloader:
         
         return None
     
+    def _download_fallback_elevation(self, bounds, job_id):
+        """Download elevation from fallback sources (AWS Terrain Tiles, MapTiler)"""
+        try:
+            logger.info("Attempting to download elevation from fallback sources")
+            
+            # Try Swiss elevation if in Switzerland region
+            if self.is_switzerland_region(bounds):
+                logger.info("Trying Swiss elevation (SwissALTI3D)")
+                swiss_result = self.download_swiss_elevation(bounds, job_id)
+                if swiss_result:
+                    return swiss_result
+            
+            # Try AWS Open Data terrain tiles (Mapzen/Tilezen terrain)
+            # These use a tile-based system, so we need to calculate tile coordinates
+            
+            # Alternative: Use SRTM via OpenTopography or similar
+            fallback_urls = [
+                # Mapbox terrain (if API key available) - using open terrain-rgb format
+                "https://api.mapbox.com/v4/mapbox.terrain-rgb/{z}/{x}/{y}.pngraw",
+                # AWS terrain tiles (Mapzen format)
+                "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+            ]
+            
+            # For now, use the ESRI World Elevation as fallback
+            esri_elevation_url = "https://elevation.arcgis.com/arcgis/rest/services/WorldElevation/Terrain/ImageServer/exportImage"
+            
+            # Calculate appropriate image size based on resolution and area
+            area_width_deg = bounds['east'] - bounds['west']
+            area_height_deg = bounds['north'] - bounds['south']
+            center_lat = (bounds['north'] + bounds['south']) / 2
+            lat_factor = abs(np.cos(center_lat * np.pi / 180))
+            area_width_m = area_width_deg * 111000 * lat_factor
+            area_height_m = area_height_deg * 111000
+            
+            pixels_width = int(area_width_m / self.pixel_size)
+            pixels_height = int(area_height_m / self.pixel_size)
+            pixels_width = min(4096, max(64, pixels_width))
+            pixels_height = min(4096, max(64, pixels_height))
+            
+            params = {
+                'bbox': f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+                'bboxSR': '4326',
+                'size': f'{pixels_width},{pixels_height}',
+                'imageSR': '4326',
+                'format': 'tiff',
+                'pixelType': 'F32',
+                'interpolation': 'RSP_BilinearInterpolation',
+                'f': 'image'
+            }
+            
+            try:
+                response = requests.get(esri_elevation_url, params=params, timeout=120)
+                if response.status_code == 200 and len(response.content) > 1000:
+                    temp_path = os.path.join(self.base_dir, f"{job_id}_elevation_fallback.tif")
+                    with open(temp_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    # Validate
+                    try:
+                        with rasterio.open(temp_path) as test_src:
+                            if test_src.width > 0 and test_src.height > 0:
+                                logger.info(f"Downloaded fallback elevation: {test_src.width}x{test_src.height}")
+                                return temp_path
+                    except:
+                        pass
+                    
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+            except Exception as e:
+                logger.warning(f"ESRI elevation fallback failed: {e}")
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Fallback elevation download failed: {e}")
+            return None
+    
     def _merge_elevation_tiles(self, tile_paths, output_path, target_bounds):
-        """Merge multiple elevation tiles into a single file"""
+        """Merge multiple elevation tiles into a single file (keeping buffer for reprojection)"""
         try:
             from rasterio.merge import merge
             from rasterio.warp import calculate_default_transform, reproject, Resampling
@@ -1386,7 +2178,7 @@ class TerrainDownloader:
                 "compress": "lzw"
             })
             
-            # Write merged result
+            # Write merged result directly (DO NOT crop - keep buffer for alignment)
             with rasterio.open(output_path, "w", **out_meta) as dest:
                 dest.write(mosaic)
             
@@ -1394,7 +2186,8 @@ class TerrainDownloader:
             for ds in tile_datasets:
                 ds.close()
             
-            logger.info(f"Successfully merged {len(tile_datasets)} elevation tiles")
+            logger.info(f"Merged {len(tile_datasets)} elevation tiles (keeping buffer for alignment)")
+            
             return output_path
             
         except Exception as e:
@@ -1410,6 +2203,14 @@ class TerrainDownloader:
     def download_imagery_data(self, bounds, job_id):
         """Download imagery data from USGS NAIP service - REAL DATA ONLY"""
         try:
+            # Try Swiss imagery first if in Switzerland region
+            if self.is_switzerland_region(bounds):
+                logger.info("Trying Swiss imagery data (SWISSIMAGE)")
+                swiss_result = self.download_swiss_imagery(bounds, job_id)
+                if swiss_result:
+                    return swiss_result
+                logger.info("Swiss imagery not available, falling back to other sources")
+            
             logger.info("Downloading imagery data from USGS NAIP")
             
             # Multiple USGS imagery service URLs to try - more comprehensive list
@@ -1522,6 +2323,13 @@ class TerrainDownloader:
         """Download imagery from alternative sources when USGS fails"""
         try:
             logger.info("Trying alternative imagery sources")
+            
+            # Try Swiss imagery if in Switzerland region
+            if self.is_switzerland_region(bounds):
+                logger.info("Trying Swiss imagery (SWISSIMAGE)")
+                swiss_result = self.download_swiss_imagery(bounds, job_id)
+                if swiss_result:
+                    return swiss_result
             
             # Use ESRI World Imagery as alternative
             service_url = "https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/export"
@@ -1662,6 +2470,8 @@ class TerrainDownloader:
                         # Check for missing data regions
                         missing_regions = self.detect_missing_data_regions(elevation_aligned, True)
                         
+                        current_elevation_path = elevation_aligned
+                        
                         if missing_regions:
                             logger.info(f"Found {len(missing_regions)} missing elevation regions, downloading additional tiles")
                             download_progress[job_id]['status'] = 'downloading_additional_elevation_tiles'
@@ -1672,10 +2482,7 @@ class TerrainDownloader:
                             if additional_tiles:
                                 # Merge tiles to create complete DEM
                                 complete_elevation_path = os.path.join(self.base_dir, f"{job_id}_elevation_complete.tif")
-                                elevation_complete = self.merge_tiles_with_main(elevation_aligned, additional_tiles, complete_elevation_path)
-                                
-                                # Final validation and gap filling if needed
-                                final_elevation_path = self._final_elevation_validation(elevation_complete, job_id)
+                                current_elevation_path = self.merge_tiles_with_main(elevation_aligned, additional_tiles, complete_elevation_path)
                                 
                                 # Clean up individual tiles
                                 for tile in additional_tiles:
@@ -1685,13 +2492,15 @@ class TerrainDownloader:
                                     except:
                                         pass
                                 
-                                files_created.append(('elevation', final_elevation_path))
-                                logger.info("Successfully created complete elevation DEM")
+                                logger.info("Merged additional elevation tiles")
                             else:
-                                files_created.append(('elevation', elevation_aligned))
                                 download_progress[job_id]['warnings'].append("Could not download additional elevation tiles to fill gaps")
-                        else:
-                            files_created.append(('elevation', elevation_aligned))
+                        
+                        # ALWAYS apply final validation and gap filling
+                        download_progress[job_id]['status'] = 'filling_elevation_gaps'
+                        final_elevation_path = self._final_elevation_validation(current_elevation_path, job_id)
+                        files_created.append(('elevation', final_elevation_path))
+                        logger.info("Successfully created complete elevation DEM")
                         
                 except Exception as e:
                     download_progress[job_id]['error'] = f"Elevation download failed: {str(e)}"

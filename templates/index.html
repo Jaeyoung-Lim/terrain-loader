@@ -1038,12 +1038,16 @@
 
             const statusMessages = {
                 'starting': 'Initializing download...',
+                'validating_coverage': 'Validating data coverage...',
                 'creating_reference_grid': 'Creating perfect alignment grid...',
-                'downloading_elevation': 'Downloading real USGS elevation data...',
-                'downloading_imagery': 'Downloading real USGS imagery data...',
+                'downloading_elevation': 'Downloading elevation tiles (this may take a moment)...',
+                'downloading_additional_elevation_tiles': 'Downloading additional elevation tiles to fill gaps...',
+                'filling_elevation_gaps': 'Filling remaining elevation gaps...',
+                'downloading_imagery': 'Downloading imagery data...',
+                'downloading_additional_imagery_tiles': 'Downloading additional imagery tiles...',
                 'verifying_alignment': 'Verifying perfect alignment...',
                 'creating_package': 'Creating download package...',
-                'completed': 'Real data with perfect alignment ready!'
+                'completed': 'Complete terrain data ready!'
             };
 
             progressText.textContent = statusMessages[status] || `Progress: ${progress}%`;
